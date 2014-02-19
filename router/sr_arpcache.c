@@ -16,8 +16,26 @@
   checking whether we should resend an request or destroy the arp request.
   See the comments in the header file for an idea of what it should look like.
 */
-void sr_arpcache_sweepreqs(struct sr_instance *sr) { 
-    /* Fill this in */
+void sr_arpcache_sweepreqs(struct sr_instance *sr) 
+{ 
+  struct sr_arpreq *req = sr->cache.requests;
+  while (req != NULL)
+  {
+    struct sr_packet *queue_pkt = req->packets;
+    if (NULL == queue_pkt)
+    {
+      fprintf(stderr,"Failed to obtain interface");
+      return;
+    }
+    struct sr_if *out_iface = sr_get_interface(sr, queue_pkt->iface);
+    if (NULL == out_iface)
+    {
+      fprintf(stderr,"Failed to obtain interface");
+      return;
+    }
+    sr_handle_arpreq(sr, req, out_iface); 
+    req = req->next;
+  }
 }
 
 /* You should not need to touch the rest of this code. */
