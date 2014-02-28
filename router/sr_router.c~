@@ -267,7 +267,7 @@ void sr_handlepacket_arp(struct sr_instance *sr, uint8_t *pkt,
 	   uint32_t * dest_addr = (uint32_t*)((char*)pak->buf + 160);
            /* check dest addr is strictly 32 bytes? */
 	   *dest_addr = ntohl(arphdr->ar_sip);
-	   sr_send_packet(sr, pak->buf, pak->len, src_iface->name);
+	   sr_send_packet(sr, pak->buf, pak->len, src_iface);
 
 	}while((req->packets)->next != NULL);
 	
