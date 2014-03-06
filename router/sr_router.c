@@ -172,12 +172,45 @@ void sr_handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req,
       /* packets waiting on this request   
       */
   
-       sr_icmp_t3_hdr_t *icmp_t3_hdr = (sr_icmp_t3_hdr_t *)malloc(sizeof(sr_icmp_t3_hdr_t));
-	icmp_t3_hdr->icmp_type = 3;
-	icmp_t3_hdr->icmp_code = 1;
-	icmp_t3_hdr->icmp_sum = 0;
-        icmp_t3_hdr->next_mtu = IP_MAXPACKET;
-	                    
+	/**/
+	uint8_t* hdrbuf; 
+	int bufsize = (sizeof(sr_icmp_t3_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t)); 
+
+	struct sr_packet *currPacket;
+	currPacket = req->packets;
+	do {
+
+	   print_hdr_eth(currPacket->buf);    
+	   hdrbuf = (uint8_t*)malloc(sizeof(sr_icmp_t3_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t)); 
+	   memcpy(hdrbuf, currPacket->buf, sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t));
+
+	   /*Create ICMP Header*/
+	   sr_icmp_t3_hdr_t *icmp_t3_hdr = (sr_icmp_t3_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+	   icmp_t3_hdr->icmp_type = 3;
+	   icmp_t3_hdr->icmp_code = 1;
+           icmp_t3_hdr->icmp_sum = 0;
+	   icmp_t3_hdr->next_mtu = IP_MAXPACKET;
+	   /*Calculate ICMP checksum */
+	   icmp_t3_hdr->icmp_sum = cksum(icmp_t3_hdr, sizeof(sr_icmp_t3_hdr_t));
+	   
+	   /* Update destination IP */
+	   sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t));
+	   ip_hdr->ip_dst = ip_hdr->ip_src;
+	   /* Do we need to change the src IP address as well? */
+	   /* Calculate IP checksum */
+	   ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+
+	   /* Update destination Eth */
+	   sr_ethernet_hdr_t *eth_hdr = (sr_ethernet_hdr_t *)(hdrbuf);
+	   memcpy(eth_hdr->ether_dhost, eth_hdr->ether_shost, sizeof(eth_hdr->ether_shost) * ETHER_ADDR_LEN);
+
+	   sr_send_packet(sr, hdrbuf, bufsize, currPacket->iface);
+
+	   /* Do we free our buffer here? */ 
+	   free(hdrbuf);
+
+	   currPacket = currPacket->next;
+	} while (currPacket != NULL);
 
       /*********************************************************************/
 
@@ -258,18 +291,18 @@ void sr_handlepacket_arp(struct sr_instance *sr, uint8_t *pkt,
 	
 	
 
-	if(req->packets == NULL)
+	/*if(req->packets == NULL)
 	{ break; }
 
 	do{
 
 	   struct sr_packet * pak = req->packets;
 	   uint32_t * dest_addr = (uint32_t*)((char*)pak->buf + 160);
-           /* check dest addr is strictly 32 bytes? */
-	   *dest_addr = ntohl(arphdr->ar_sip);
+           // check dest addr is strictly 32 bytes? 
+	   dest_addr = ntohl(arphdr->ar_sip);
 	   sr_send_packet(sr, pak->buf, pak->len, src_iface->name);
 
-	}while((req->packets)->next != NULL);
+	}while((req->packets)->next != NULL);*/
 	
 
 
