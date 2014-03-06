@@ -196,7 +196,7 @@ void sr_handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req,
 	   /* Update destination IP */
 	   sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t));
 	   ip_hdr->ip_dst = ip_hdr->ip_src;
-	   /* Do we need to change the src IP address as well? */
+	   /* TODO: change the src IP address as well? */
 	   /* Calculate IP checksum */
 	   ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
 
@@ -204,7 +204,12 @@ void sr_handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req,
 	   sr_ethernet_hdr_t *eth_hdr = (sr_ethernet_hdr_t *)(hdrbuf);
 	   memcpy(eth_hdr->ether_dhost, eth_hdr->ether_shost, sizeof(eth_hdr->ether_shost) * ETHER_ADDR_LEN);
 
-	   sr_send_packet(sr, hdrbuf, bufsize, currPacket->iface);
+	   /* TODO: change the src Eth address as well */
+
+	   /* TODO: lookup outgoing interface in routing table */
+	   char* iface_name = (char *)malloc(sizeof(char) * sr_IFACE_NAMELEN);	
+	   sr_lookup_iface_rt(sr, ip_hdr->ip_dst, iface_name);
+	   sr_send_packet(sr, hdrbuf, bufsize, iface_name);
 
 	   /* Do we free our buffer here? */ 
 	   free(hdrbuf);
@@ -287,22 +292,26 @@ void sr_handlepacket_arp(struct sr_instance *sr, uint8_t *pkt,
     {
       /*********************************************************************/
       /* TODO: send all packets on the req->packets linked list            */
-
-	
 	
 
-	/*if(req->packets == NULL)
-	{ break; }
+	
 
-	do{
+	if(req->packets == NULL)
+        { break; }
 
-	   struct sr_packet * pak = req->packets;
-	   uint32_t * dest_addr = (uint32_t*)((char*)pak->buf + 160);
-           // check dest addr is strictly 32 bytes? 
-	   dest_addr = ntohl(arphdr->ar_sip);
-	   sr_send_packet(sr, pak->buf, pak->len, src_iface->name);
+        struct sr_packet * pak = req->packets;
 
-	}while((req->packets)->next != NULL);*/
+        do{
+
+          /* fill in destination MAC address */
+          sr_ethernet_hdr_t  *  eth_hdr = (sr_ethernet_hdr_t *)(pak->buf);
+          memcpy(eth_hdr->ether_dhost, arphdr->ar_sha, sizeof(arphdr->ar_sha) * ETHER_ADDR_LEN);
+
+          sr_send_packet(sr, pak->buf, pak->len, src_iface->name);
+          pak = (req->packets)->next;
+
+        }while(pak != NULL);
+
 	
 
 
@@ -352,6 +361,48 @@ void sr_handlepacket(struct sr_instance* sr,
   /* TODO: Handle packets                                                  */
 
 
+	   uint8_t* hdrbuf; 
+	   int bufsize = (sizeof(sr_icmp_t3_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t)); 
+	   print_hdrs(packet, len);	   
+	   hdrbuf = (uint8_t*)malloc(sizeof(sr_icmp_t3_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t)); 
+	   memcpy(hdrbuf, packet, sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t));
+
+	   /*Create ICMP Header*/
+	   sr_icmp_t3_hdr_t *icmp_t3_hdr = (sr_icmp_t3_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+	   icmp_t3_hdr->icmp_type = 3;
+	   icmp_t3_hdr->icmp_code = 1;
+           icmp_t3_hdr->icmp_sum = 0;
+	   icmp_t3_hdr->next_mtu = IP_MAXPACKET;
+	   /*Calculate ICMP checksum */
+	   icmp_t3_hdr->icmp_sum = cksum(icmp_t3_hdr, sizeof(sr_icmp_t3_hdr_t));
+	   
+	   /* Update destination IP */
+	   sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t));
+	   ip_hdr->ip_dst = ip_hdr->ip_src;
+	   /* update information about next header */
+	   ip_hdr->ip_p = htons(ip_protocol_icmp);
+	   /* TODO: change the src IP address as well? */
+	   /* Calculate IP checksum */
+	   ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+
+	   /* Update destination Eth */
+	   sr_ethernet_hdr_t *eth_hdr = (sr_ethernet_hdr_t *)(hdrbuf);
+	   memcpy(eth_hdr->ether_dhost, eth_hdr->ether_shost, sizeof(uint8_t) * ETHER_ADDR_LEN);
+  	   
+	   eth_hdr->ether_type = htons(ethertype_ip);
+	   
+	   /* TODO: change the src Eth address as well */
+
+	   /* lookup outgoing interface in routing table */
+	   char* iface_name = (char *)malloc(sizeof(char) * sr_IFACE_NAMELEN);	
+	   sr_lookup_iface_rt(sr, ip_hdr->ip_dst, iface_name);
+
+	   print_hdrs(hdrbuf, len);
+
+	   sr_send_packet(sr, hdrbuf, bufsize, iface_name);
+
+	   /* Do we free our buffer here? */ 
+	   free(hdrbuf);
 
   /*************************************************************************/
 

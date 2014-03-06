@@ -22,6 +22,29 @@
 #include "sr_rt.h"
 #include "sr_router.h"
 
+
+/*---------------------------------------------------------------------
+ * Method:
+ * 	Returns 0 if successful, -1 if unsuccessful
+ *---------------------------------------------------------------------*/
+int sr_lookup_iface_rt(struct sr_instance* sr, uint32_t ip_addr, char* iface_name) {
+	
+	if (!iface_name) {
+		return -1;
+	}
+	struct sr_rt * rt_entry = sr->routing_table;
+	
+	while(rt_entry) {
+		if ((rt_entry->dest).s_addr == ip_addr) {
+			/* IP address matches */
+			memcpy(iface_name, rt_entry->interface, sizeof(rt_entry->interface) * sr_IFACE_NAMELEN);	
+			return 0;
+		}
+		rt_entry = rt_entry->next;   
+	}
+	return -1; 
+}
+
 /*---------------------------------------------------------------------
  * Method:
  *
