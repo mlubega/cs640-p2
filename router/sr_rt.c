@@ -21,7 +21,7 @@
 
 #include "sr_rt.h"
 #include "sr_router.h"
-
+#include "sr_utils.h"
 
 /*---------------------------------------------------------------------
  * Method:
@@ -30,18 +30,23 @@
 int sr_lookup_iface_rt(struct sr_instance* sr, uint32_t ip_addr, char* iface_name) {
 	
 	if (!iface_name) {
+		printf("received a NULL interface\n");
 		return -1;
 	}
 	struct sr_rt * rt_entry = sr->routing_table;
 	
 	while(rt_entry) {
+		/*printf("rt_entry->dest: %lu\n", (unsigned long)(rt_entry->dest).s_addr);*/
+		print_addr_ip(rt_entry->dest);
+		print_addr_ip_int(ip_addr);
 		if ((rt_entry->dest).s_addr == ip_addr) {
 			/* IP address matches */
-			memcpy(iface_name, rt_entry->interface, sizeof(rt_entry->interface) * sr_IFACE_NAMELEN);	
+			memcpy(iface_name, rt_entry->interface, sizeof(char) * sr_IFACE_NAMELEN);	
 			return 0;
 		}
 		rt_entry = rt_entry->next;   
 	}
+	printf("could not find a match for the IP\n");
 	return -1; 
 }
 
