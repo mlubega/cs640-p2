@@ -44,4 +44,5 @@ void sr_print_routing_table(struct sr_instance* sr);
 void sr_print_routing_entry(struct sr_rt* entry);
 
 int sr_lookup_iface_rt(struct sr_instance*, uint32_t, char*); 
+struct sr_rt* sr_lookup_nexthop_ip(struct sr_instance*, uint32_t); 
 #endif  /* --  sr_RT_H -- */

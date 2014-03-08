@@ -23,6 +23,46 @@
 #include "sr_router.h"
 #include "sr_utils.h"
 
+
+/*---------------------------------------------------------------------
+ * Method:
+ * 	Returns next hop routign table entry if successful, returns NULL if no match
+ *---------------------------------------------------------------------*/
+struct sr_rt* sr_lookup_nexthop_ip(struct sr_instance* sr, uint32_t ip_addr) {
+	
+	struct sr_rt * rt_entry = sr->routing_table;
+	/*uint32_t longest_match = -1;*/	
+	uint32_t longest_mask = 0;
+	struct sr_rt* longest_entry = NULL;
+
+	uint32_t entry_ip;
+	/*uint32_t entry_ip_masked;*/
+	uint32_t ip_addr_masked;   
+	
+	while(rt_entry) {
+		
+		entry_ip = (rt_entry->dest).s_addr;
+		/*entry_ip_masked = (entry_ip & (rt_entry->mask).s_addr);*/
+		ip_addr_masked = (ip_addr & (rt_entry->mask).s_addr);
+
+		/* check if the ip addresses match */	
+		if (entry_ip == ip_addr_masked) {
+			
+			/* if match, check if it is longer */
+			if ((rt_entry->mask).s_addr > longest_mask) {
+				longest_mask = (rt_entry->mask).s_addr;
+				/*longest_match = entry_ip;*/
+				longest_entry = rt_entry;
+			}
+		}
+
+	   rt_entry = rt_entry->next;
+	   
+	}
+	return longest_entry;
+
+}
+
 /*---------------------------------------------------------------------
  * Method:
  * 	Returns 0 if successful, -1 if unsuccessful
