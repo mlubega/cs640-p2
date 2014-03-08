@@ -169,6 +169,10 @@ enum sr_arp_hrd_fmt {
   arp_hrd_ethernet = 0x0001,
 };
 
+enum sr_sanity_hdrs {
+   eth, ip, arp, icmp
+};
+
 
 struct sr_arp_hdr
 {

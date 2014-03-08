@@ -178,6 +178,62 @@ void sr_handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req,
 	currPacket = req->packets;
 	do {
 
+	   hdrbuf = (uint8_t*)malloc(sizeof(sr_icmp_t3_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t)); 
+	   memcpy(hdrbuf, currPacket->buf, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+
+	   /*Create ICMP Header*/
+	   sr_icmp_t3_hdr_t *icmp_t3_hdr = (sr_icmp_t3_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+	   icmp_t3_hdr->icmp_type = 3;
+	   icmp_t3_hdr->icmp_code = 1;
+           icmp_t3_hdr->icmp_sum = 0;
+	   icmp_t3_hdr->next_mtu = IP_MAXPACKET;
+	   /*Calculate ICMP checksum */
+	   icmp_t3_hdr->icmp_sum = cksum(icmp_t3_hdr, sizeof(sr_icmp_t3_hdr_t));
+	   
+	   /* Update destination IP to send back to source*/
+	   sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t));
+
+	   ip_hdr->ip_dst = ip_hdr->ip_src;
+	   
+	   /* update information about next header */
+	   ip_hdr->ip_p = htons(ip_protocol_icmp);
+
+	   
+	   /* lookup outgoing interface in routing table */
+	   char* iface_name = (char *)malloc(sizeof(char) * sr_IFACE_NAMELEN);	
+	   int retval;
+	   retval = sr_lookup_iface_rt(sr, ip_hdr->ip_dst, iface_name);
+	   if (retval < 0) {
+		printf("Interface lookup failed\n");
+	   } else {
+	   	printf("IP: %d\n", ip_hdr->ip_dst);
+		printf("interface name: %s\n", iface_name);
+	   }
+	   /*print_hdrs(hdrbuf, len);*/
+           
+	   /* update source IP to be the interface we are sending from */
+	   struct sr_if *our_interface = sr_get_interface(sr, iface_name);		
+	   ip_hdr->ip_src = our_interface->ip;	   
+
+	   /* Calculate IP checksum */
+	   ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+	   print_hdr_ip((uint8_t *)ip_hdr);
+	  
+
+	   /* Update destination Eth */
+	   sr_ethernet_hdr_t *eth_hdr = (sr_ethernet_hdr_t *)(hdrbuf);
+	   memcpy(eth_hdr->ether_dhost, eth_hdr->ether_shost, sizeof(uint8_t) * ETHER_ADDR_LEN);
+  	   /* Update the source Eth */
+	   memcpy(eth_hdr->ether_shost, our_interface->addr, sizeof(unsigned char) * ETHER_ADDR_LEN);
+	   eth_hdr->ether_type = htons(ethertype_ip);
+	   
+	   print_hdr_eth(hdrbuf);
+ 
+	   sr_send_packet(sr, hdrbuf, bufsize, iface_name);
+
+	   /* free our buffers here */ 
+	   free(hdrbuf);
+	   free(iface_name);
 
 	   currPacket = currPacket->next;
 	} while (currPacket != NULL);
@@ -271,8 +327,18 @@ void sr_handlepacket_arp(struct sr_instance *sr, uint8_t *pkt,
           /* fill in destination MAC address */
           sr_ethernet_hdr_t  *  eth_hdr = (sr_ethernet_hdr_t *)(pak->buf);
           memcpy(eth_hdr->ether_dhost, arphdr->ar_sha, sizeof(arphdr->ar_sha) * ETHER_ADDR_LEN);
+	  
+	 /* decrement TTL of ip header*/
+          sr_ip_hdr_t  *  ip_hdr = (sr_ip_hdr_t *)(pak->buf + sizeof(sr_ip_hdr_t));
+	  ip_hdr->ip_tll--;
 
-          sr_send_packet(sr, pak->buf, pak->len, src_iface->name);
+	 /* recompute checksum*/
+	  ip_hdr->ip_sum = 0;
+	  ip_hdr->ip_sum = cksum(ip_hdr, pak->len - sizeof(sr_ethernet_hdr_t));
+	  
+
+	  /* send packet on outgoing interface */
+          sr_send_packet(sr, pak->buf, pak->len, pak->iface);
           pak = (req->packets)->next;
 
         }while(pak != NULL);
@@ -326,71 +392,129 @@ void sr_handlepacket(struct sr_instance* sr,
   /* TODO: Handle packets                                                  */
 
 
-           int bufsize = (sizeof(sr_icmp_t3_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t));
-	   uint8_t* hdrbuf; 
-	   print_hdrs(packet, len);	   
-	   hdrbuf = (uint8_t*)malloc(sizeof(sr_icmp_t3_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t)); 
-	   memcpy(hdrbuf, packet, sizeof(sr_ethernet_hdr_t));
+   /*snity check header*/
+   if (len < sizeof(sr_ethernet_hdr_t)){
+    /*generate ICMP error packet */
+   }
 
-	   /*Create ICMP Header*/
-	   sr_icmp_t3_hdr_t *icmp_t3_hdr = (sr_icmp_t3_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
-	   icmp_t3_hdr->icmp_type = 3;
-	   icmp_t3_hdr->icmp_code = 1;
-           icmp_t3_hdr->icmp_sum = 0;
-	   icmp_t3_hdr->next_mtu = IP_MAXPACKET;
-	   /*Calculate ICMP checksum */
-	   icmp_t3_hdr->icmp_sum = cksum(icmp_t3_hdr, sizeof(sr_icmp_t3_hdr_t));
-	   
+   sr_ethernet_hdr_t * eth_hdr = (sr_ethernet_hdr_t *)packet;
 
-	   sr_arp_hdr_t *arp_hdr = (sr_arp_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
+  /* determine next header is ip or arp*/
+   switch(eth_hdr->ether_type){
 
-	   /* Update destination IP */
-	   sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t));
-	   ip_hdr->ip_len = sizeof(sr_ip_hdr_t);
-	   ip_hdr->ip_tos = 0;
-	   
+    /* ARP Header*/
+    case ethertype_arp:
+	
+	if( !sr_valid_len(len, eth+arp))
+    		/*generate ICMP error packet */
 
-	   ip_hdr->ip_dst = arp_hdr->ar_sip;
-	   
-	   /* update information about next header */
-	   ip_hdr->ip_p = htons(ip_protocol_icmp);
+	sr_arp_hdr_t * arp_hdr = (sr_arp_hdr_t *) (packet + sizeof(sr_ethernet_hdr_t));
 
-	   
-	   /* lookup outgoing interface in routing table */
-	   char* iface_name = (char *)malloc(sizeof(char) * sr_IFACE_NAMELEN);	
-	   int retval;
-	   retval = sr_lookup_iface_rt(sr, ip_hdr->ip_dst, iface_name);
-	   if (retval < 0) {
-		printf("Interface lookup failed\n");
-	   } else {
-	   	printf("IP: %d\n", ip_hdr->ip_dst);
-		printf("interface name: %s\n", iface_name);
-	   }
-	   /*print_hdrs(hdrbuf, len);*/
-           
-	   struct sr_if *our_interface = sr_get_interface(sr, iface_name);		
-	   ip_hdr->ip_src = our_interface->ip;	   
+	/*determine arp req or reply */
+	switch(arp_hdr->ar_op) {
 
-	   /* Calculate IP checksum */
-	   ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
-	   print_hdr_ip((uint8_t *)ip_hdr);
-	  
+	  /* ARP Request */
+	  case arp_op_request:
+	
+		/*if this request (ip) is matched one of our ip's, send reply */
+		if( arp_hdr->ar_tip ==  
 
-	   /* Update destination Eth */
-	   sr_ethernet_hdr_t *eth_hdr = (sr_ethernet_hdr_t *)(hdrbuf);
-	   memcpy(eth_hdr->ether_dhost, eth_hdr->ether_shost, sizeof(uint8_t) * ETHER_ADDR_LEN);
-  	   memcpy(eth_hdr->ether_shost, our_interface->addr, sizeof(unsigned char) * ETHER_ADDR_LEN);
-	   eth_hdr->ether_type = htons(ethertype_ip);
-	   
-	   /* TODO: change the src Eth address as well */
-	   print_hdr_eth(hdrbuf);
- 
-	   sr_send_packet(sr, hdrbuf, bufsize, iface_name);
+		break;
 
-	   /* Do we free our buffer here? */ 
-	   /*free(hdrbuf);*/
+          /*ARP Reply */
+	  case arp_op_reply:
+		/* cache reply only if this request (ip) is matched one of our ip's */
+
+
+		break;
+
+          default:	 
+    	       printf("Unknown ARP opcode => drop packet\n");
+               return;
+
+
+
+
+	}
+
+
+		break;
+    case ethertype_ip:
+
+//destined for our ip address?
+
+   // -->if ICMP echo req, verfiy checksum, send ICMP reply
+
+   // -->if TCP or UPD send IMCP port unreachable to host
+
+  // --> other type ignore 
+
+//if else, forward logic
+
+
+	// --> sanity check length & cksum
+	// --> sanity check checksum
+	// --> decrement ttl in ip
+	//--> find longest prefix in routing table that matches w/ destination address
+	//--> arpcache lookup for next hop MAC address
+	// |--> if not in cache, send out arp req, wait for arp reply
+	// |--> add packet to queue of packets waiting on ARP reply
+	//if err occurs at any point, send ICMP error message back to sender
+
+
+
+   		break;
+
+	default:
+    /*generate ICMP error packet */
+   }
+   
+
+
+
+
 
   /*************************************************************************/
 
 }/* end sr_ForwardPacket */
+
+/*---------------------------------------------------------------------
+ * Method: sr_valid_len(unsigned int len, int hdrs)
+ * Scope:  Global
+ *
+ * Sanity checks length. 
+ *---------------------------------------------------------------------*/
+bool sr_valid_len( unsigned int plen, int hdrs){
+
+	switch(hdrs){
+
+	case eth:
+        
+		return( if(len >= sizeof(sr_ethernet_hdr_t)));
+		break;
+	case eth+ip:
+
+		return( if(len >= sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t)));
+		break;
+	case eth+arp:
+
+		return( if(len >= sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t)));
+		break;
+
+	case eth+ip+icmp:
+	
+		return( if(len >= sizeof(sr_ethernet_hdr_t))+ sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_hdr_t));
+		break;
+
+	default:
+
+	  return NULL;
+
+	}
+
+
+
+} /* end of sanity len check*/
+
+
 
