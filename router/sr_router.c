@@ -188,7 +188,7 @@ void sr_handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req,
            icmp_t3_hdr->icmp_sum = 0;
 	   icmp_t3_hdr->next_mtu = IP_MAXPACKET;
 	   /*Calculate ICMP checksum */
-	   icmp_t3_hdr->icmp_sum = cksum(icmp_t3_hdr, sizeof(sr_icmp_t3_hdr_t));
+	   icmp_t3_hdr->icmp_sum = cksum(icmp_t3_hdr, currPacket->len - sizeof(sr_ethernet_hdr_t)- sizeof(sr_ip_hdr_t));
 	   
 	   /* Update destination IP to send back to source*/
 	   sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t));
@@ -215,7 +215,8 @@ void sr_handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req,
 	   struct sr_if *our_interface = sr_get_interface(sr, iface_name);		
 	   ip_hdr->ip_src = our_interface->ip;	   
 	   /* Calculate IP checksum */
-	   ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t));
+	   ip_hdr->ip_sum = 0;
+	   ip_hdr->ip_sum = cksum(ip_hdr, currPacket->len - sizeof(sr_ethernet_hdr_t));
 	   print_hdr_ip((uint8_t *)ip_hdr);
 	  
 
@@ -428,9 +429,11 @@ void sr_handlepacket(struct sr_instance* sr,
    /* determine next header is ip or arp*/
    switch(ntohs(eth_hdr->ether_type)){
 
+    printf("Packet Type: %u\n", ntohs(eth_hdr->ether_type));
     /* ARP Header*/
     case ethertype_arp: {
 	
+    	printf(" Calling Handle_Packet-ARP\n");
 	sr_handlepacket_arp(sr, packet, len, this_interface);
 	/* what happens if this interface doesn't exist? */
 	break;
@@ -442,14 +445,22 @@ void sr_handlepacket(struct sr_instance* sr,
 
 	/*Verify packet length, checksum */
 	if(!sr_valid_len(len, eth+ip))  {
+   	 printf("Length was invalid. Packet Dropped\n");
 		break;	
 	}
 	
-	uint16_t ip_sum = ip_hdr->ip_sum;
+	uint16_t ip_sum =  ip_hdr->ip_sum;
 	ip_hdr->ip_sum = 0;
-	if( ip_sum != cksum(ip_hdr, len - sizeof(sr_ethernet_hdr_t)))
-		break;
 
+	
+
+	if( ip_sum != cksum(ip_hdr, len - sizeof(sr_ethernet_hdr_t))){
+   		 printf("Total Len: %u, Calc Len: %lu, Eth Size: %lu, IP Size: %lu\n", len, len - sizeof(sr_ethernet_hdr_t),sizeof(sr_ethernet_hdr_t), sizeof(sr_ip_hdr_t));
+   		 printf("Pre-Check Sum: %d\n", ip_sum);
+   		 printf("calculated sum: %d\n", htons(cksum(ip_hdr, len - sizeof(sr_ethernet_hdr_t))));
+   		 printf("Checksum  was invalid. Packet Dropped\n");
+		break;
+	}
 	printf("ip length and cksum ok\n");
 
         /* destined for our ip address */
@@ -534,7 +545,7 @@ void sr_handlepacket(struct sr_instance* sr,
 			printf("arp entry found in cache\n");
 
 
-	   /* lookup outgoing interface in routing table */
+	   /* lookup outgoing interface name in routing table */
 	   char* iface_name = (char *)malloc(sizeof(char) * sr_IFACE_NAMELEN);	
 	   int retval;
 	   retval = sr_lookup_iface_rt(sr, ip_hdr->ip_dst, iface_name);
@@ -545,15 +556,26 @@ void sr_handlepacket(struct sr_instance* sr,
 		printf("interface name: %s\n", iface_name);
 	   }
 
+		/* Get interface struct based on name*/
+		struct sr_if *out_if = sr_get_interface(sr, iface_name);
+
+
+
+
+
+
+
 
 			/* replace ethernet mac address */
-			memcpy(eth_hdr->ether_shost, this_interface->addr, sizeof(unsigned char) * ETHER_ADDR_LEN);
+			memcpy(eth_hdr->ether_shost, out_if->addr, sizeof(unsigned char) * ETHER_ADDR_LEN);
 		/*	memcpy(eth_hdr->ether_shost, eth_hdr->ether_dhost, sizeof(unsigned char) * ETHER_ADDR_LEN);  */
 			memcpy(eth_hdr->ether_dhost, arp_entry->mac, sizeof(unsigned char) * ETHER_ADDR_LEN);
 				
  			print_addr_eth(eth_hdr->ether_shost);
  			print_addr_eth(eth_hdr->ether_dhost);
- 	
+ 			printf("Iterface from routing table: %s\n", iface_name);
+ 			printf("Iterface from  next hop function: %s\n", next_hop->interface);
+
 			/* forward packet to next hop */
 			sr_send_packet(sr, packet, len, iface_name);
 		/*	sr_send_packet(sr, packet, len, next-hop->interface);*/
@@ -645,6 +667,8 @@ void generate_icmp_message(struct sr_instance *sr, unsigned int type, unsigned i
 	   /* update ip source to be our interface */
 	   ip_hdr->ip_src = iface->ip;	   
 
+	   /* set our icmp packet ttl = 64*/
+	   ip_hdr->ip_ttl = 64;
 	   /* Calculate IP checksum */
 	   ip_hdr->ip_sum = 0; 
 	   ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t) + size_of_icmp);
