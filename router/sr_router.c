@@ -431,11 +431,9 @@ void sr_handlepacket(struct sr_instance* sr,
    /* determine next header is ip or arp*/
    switch(ntohs(eth_hdr->ether_type)){
 
-    printf("Packet Type: %u\n", ntohs(eth_hdr->ether_type));
     /* ARP Header*/
     case ethertype_arp: {
 	
-    	printf(" Calling Handle_Packet-ARP\n");
 	sr_handlepacket_arp(sr, packet, len, this_interface);
 	/* what happens if this interface doesn't exist? */
 	break;
@@ -445,28 +443,41 @@ void sr_handlepacket(struct sr_instance* sr,
 	sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t)); 
 
 
-	/*Verify packet length, checksum */
+	/*Verify packet length */
 	if(!sr_valid_len(len, eth+ip))  {
    	 printf("Length was invalid. Packet Dropped\n");
 		break;	
 	}
 	
+	/* verify ip cksum */
 	uint16_t ip_sum =  ip_hdr->ip_sum;
 	ip_hdr->ip_sum = 0;
 
 	if( ip_sum != cksum(ip_hdr, ip_hdr->ip_hl * 4)){
-   		 printf("Total Len: %u, Calc Len: %lu, Eth Size: %lu, IP Size: %lu\n", len, len - sizeof(sr_ethernet_hdr_t),sizeof(sr_ethernet_hdr_t), sizeof(sr_ip_hdr_t));
+   		 /*printf("Total Len: %u, Calc Len: %lu, Eth Size: %lu, IP Size: %lu\n", len, len - sizeof(sr_ethernet_hdr_t),sizeof(sr_ethernet_hdr_t), sizeof(sr_ip_hdr_t));
    		 printf("Pre-Check Sum: 0x%04X\n", ip_sum);
-   		 printf("calculated sum: 0x%04X\n", cksum(ip_hdr, ip_hdr->ip_hl*4));
+   		 printf("calculated sum: 0x%04X\n", cksum(ip_hdr, ip_hdr->ip_hl*4));*/
    		 printf("Checksum  was invalid. Packet Dropped\n");
 		break;
 	}
 	printf("ip length and cksum ok\n");
 
-        /* destined for our ip address */
+
+
+
+        /* if destined for our ip address */
 	/*if(ip_hdr->ip_dst == this_interface->ip){*/
-	printf("protocol: 0x%04X \t UDP: 0x%04X\n", ip_hdr->ip_p, ip_protocol_udp);
 	if ( sr_is_our_packet(sr, ip_hdr->ip_dst) ) {
+
+		/* check if TTL has been exceeded */
+		ip_hdr->ip_ttl--;
+		printf("IP packet ttl: %d\n", ip_hdr->ip_ttl);
+		if(ip_hdr->ip_ttl == 0){
+			/*Send ICMP packet time exceeded */
+			generate_icmp_message(sr, icmp_timeout, 0, packet, len, this_interface);
+			printf("ip packet timed out\n");
+			break;
+		}
 
 		switch(ip_hdr->ip_p){
 
@@ -477,7 +488,6 @@ void sr_handlepacket(struct sr_instance* sr,
 			  
 			   /* ICMP Echo Request*/
 			   if( icmp_hdr->icmp_type == icmp_echo_req){
-				printf("identified echo request\n");
 				/*Verify  Checksum*/
 				uint16_t stated_cksum = icmp_hdr->icmp_sum;
 				icmp_hdr->icmp_sum = 0;
@@ -514,13 +524,13 @@ void sr_handlepacket(struct sr_instance* sr,
 	/* Forward IP Packet Onward*/
 	else{
 		printf("IP packet ttl: %d\n", ip_hdr->ip_ttl);
+		ip_hdr->ip_ttl--;
 		if(ip_hdr->ip_ttl == 0){
 			/*Send ICMP packet time exceeded */
 			generate_icmp_message(sr, icmp_timeout, 0, packet, len, this_interface);
-			printf("ip packet timed out\n");
+			break;
 		}
 		printf("forwarding packet onward\n");
-		ip_hdr->ip_ttl--;
 		
 		/* recompute cksum */
 		printf("computing new ip cksum\n");
@@ -532,6 +542,7 @@ void sr_handlepacket(struct sr_instance* sr,
 		/* look up ip address in routing table with longest prefix match */
 		struct sr_rt* next_hop = sr_lookup_nexthop_ip(sr, ip_hdr->ip_dst);
 
+		/* prefix match was not found */
 		if (!next_hop) {
 			/* Send ICMP message */
 			printf("no next hop entry found in routing table\n");
@@ -541,25 +552,26 @@ void sr_handlepacket(struct sr_instance* sr,
 		printf("looking up mac address in cache\n");
 		
 		/* look up MAC address corresponding to next hop ip */
-	struct sr_arpentry *arp_entry = sr_arpcache_lookup(&(sr->cache), (next_hop->dest).s_addr);
-         
+		struct sr_arpentry *arp_entry = sr_arpcache_lookup(&(sr->cache), (next_hop->dest).s_addr);
+        
+		/* found MAC address in arp cache */ 
 		if (arp_entry) {
 			printf("arp entry found in cache\n");
 
 
-	   /* lookup outgoing interface name in routing table */
-	   char* iface_name = (char *)malloc(sizeof(char) * sr_IFACE_NAMELEN);	
-	   int retval;
-	   retval = sr_lookup_iface_rt(sr, ip_hdr->ip_dst, iface_name);
-	   if (retval < 0) {
-		printf("Interface lookup failed\n");
-	   } else {
-	   	printf("IP: %d\n", ip_hdr->ip_dst);
-		printf("interface name: %s\n", iface_name);
-	   }
+			/* lookup outgoing interface name in routing table */
+	   		char* iface_name = (char *)malloc(sizeof(char) * sr_IFACE_NAMELEN);	
+	   		int retval;
+	   		retval = sr_lookup_iface_rt(sr, ip_hdr->ip_dst, iface_name);
+	   		if (retval < 0) {
+				printf("Interface lookup failed\n");
+	   		} else {
+	   			printf("IP: %d\n", ip_hdr->ip_dst);
+				printf("interface name: %s\n", iface_name);
+	   		}	
 
-		/* Get interface struct based on name*/
-		struct sr_if *out_if = sr_get_interface(sr, iface_name);
+	   		/* Get interface struct based on name*/
+	   		struct sr_if *out_if = sr_get_interface(sr, iface_name);
 
 
 
@@ -627,20 +639,28 @@ void generate_icmp_message(struct sr_instance *sr, unsigned int type, unsigned i
 
 	   uint8_t *hdrbuf;
 	   uint size_of_icmp;
-
+	  
 	   /*Create ICMP Header*/
-	   if (type == icmp_dst_unrchbl) {
-		size_of_icmp = sizeof(sr_icmp_t3_hdr_t) + 8;
+	   if (type == icmp_dst_unrchbl || type == icmp_timeout) {
+		printf("Generating ICMP DST UNRCHBL packet\n");
+		size_of_icmp = sizeof(sr_icmp_t3_hdr_t);
 
-	   	hdrbuf = (uint8_t*)malloc(sizeof(sr_icmp_t3_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t) + 8); 
-	   	memcpy(hdrbuf, packet, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + 8);
-		
-		sr_icmp_t3_hdr_t *icmp_t3_hdr = (sr_icmp_t3_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + 8);
+	   	hdrbuf = (uint8_t*)malloc(sizeof(sr_icmp_t3_hdr_t) + sizeof(sr_ethernet_hdr_t)+ sizeof(sr_ip_hdr_t)); 
+	   	memcpy(hdrbuf, packet, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+		/*hdrbuf = (uint8_t*)malloc(len);
+		memcpy(hdrbuf, packet, len);*/
+
+		sr_icmp_t3_hdr_t *icmp_t3_hdr = (sr_icmp_t3_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
 	   	icmp_t3_hdr->icmp_type = type;
 	   	icmp_t3_hdr->icmp_code = code;
            	icmp_t3_hdr->icmp_sum = 0;
 	   	icmp_t3_hdr->next_mtu = IP_MAXPACKET;
+		memcpy(icmp_t3_hdr->data, packet + sizeof(sr_ethernet_hdr_t), ICMP_DATA_SIZE);
+		print_hdr_icmp(hdrbuf + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
 	   	/*Calculate ICMP checksum */
+		printf("Size of ICMP 3 HDR : %lu\n", sizeof(sr_icmp_t3_hdr_t));
+		printf("Size of len - everythin xcept icmp: %lu\n",  len - sizeof(sr_ethernet_hdr_t)-sizeof(sr_ip_hdr_t));
+		printf("Total length: %u\n", len);
 	   	icmp_t3_hdr->icmp_sum = cksum(icmp_t3_hdr, sizeof(sr_icmp_t3_hdr_t));
 	   } 
 	   else if (type == icmp_echo_reply) {
@@ -676,11 +696,11 @@ void generate_icmp_message(struct sr_instance *sr, unsigned int type, unsigned i
 	   ip_hdr->ip_dst = ip_hdr->ip_src;
 	   
 	   /* update information about next header */
-	   printf("IP Protocol Before: %u\n", ip_hdr->ip_p);
 	   ip_hdr->ip_p = ip_protocol_icmp;
-	   printf("IP Protocol: %u\n", ip_hdr->ip_p);
 	   /* update ip source to be our interface */
 	   ip_hdr->ip_src = iface->ip;	   
+
+	   ip_hdr->ip_len = htons(sizeof(sr_ip_hdr_t) + size_of_icmp);
 
 	   /* set our icmp packet ttl = 64*/
 	   ip_hdr->ip_ttl = 64;
@@ -698,9 +718,8 @@ void generate_icmp_message(struct sr_instance *sr, unsigned int type, unsigned i
 	   eth_hdr->ether_type = htons(ethertype_ip);
 	   
 	   uint bufsize = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + size_of_icmp;
-	   print_hdrs(hdrbuf, bufsize);
 
-	   printf("sending ICMP message out interface %s\n", iface->name); 
+	   printf("sending ICMP pkt of size: %u   out interface %s\n", bufsize, iface->name); 
 	   print_hdrs(hdrbuf, bufsize);
 	   sr_send_packet(sr, hdrbuf, bufsize, iface->name);
 
