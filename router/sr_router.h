@@ -78,6 +78,7 @@ void sr_print_if_list(struct sr_instance* );
 
 /* -- our added functions -- */
 int sr_valid_len(unsigned int, int);
-void generate_icmp_message(struct sr_instance*, unsigned int, unsigned int, uint8_t*, struct sr_if*);
+void generate_icmp_message(struct sr_instance*, unsigned int, unsigned int, uint8_t*, unsigned int, struct sr_if*);
+int sr_is_our_packet(struct sr_instance*, uint32_t);
 
 #endif /* SR_ROUTER_H */

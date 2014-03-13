@@ -44,10 +44,14 @@ struct sr_rt* sr_lookup_nexthop_ip(struct sr_instance* sr, uint32_t ip_addr) {
 		entry_ip = (rt_entry->dest).s_addr;
 		/*entry_ip_masked = (entry_ip & (rt_entry->mask).s_addr);*/
 		ip_addr_masked = (ip_addr & (rt_entry->mask).s_addr);
-
+		
+		printf("IP dest:");
+		print_addr_ip_int(entry_ip);
+		printf("IP in rt entry:");
+		print_addr_ip_int(ip_addr_masked);
 		/* check if the ip addresses match */	
 		if (entry_ip == ip_addr_masked) {
-			
+			printf("match found\n");	
 			/* if match, check if it is longer */
 			if ((rt_entry->mask).s_addr > longest_mask) {
 				longest_mask = (rt_entry->mask).s_addr;

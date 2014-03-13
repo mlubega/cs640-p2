@@ -216,7 +216,7 @@ void sr_handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req,
 	   ip_hdr->ip_src = our_interface->ip;	   
 	   /* Calculate IP checksum */
 	   ip_hdr->ip_sum = 0;
-	   ip_hdr->ip_sum = cksum(ip_hdr, currPacket->len - sizeof(sr_ethernet_hdr_t));
+	   ip_hdr->ip_sum = cksum(ip_hdr, ip_hdr->ip_hl * 4);
 	   print_hdr_ip((uint8_t *)ip_hdr);
 	  
 
@@ -357,9 +357,11 @@ void sr_handlepacket_arp(struct sr_instance *sr, uint8_t *pkt,
 		printf("Packet sent successfully...somewhere\n");
 	}	 
 
-	pak = (req->packets)->next;
+	pak = (pak)->next;
 
         }while(pak != NULL);
+
+			printf("DONE sending waiting arp packets\n");
 
 	
 
@@ -419,7 +421,7 @@ void sr_handlepacket(struct sr_instance* sr,
    sr_ethernet_hdr_t * eth_hdr = (sr_ethernet_hdr_t *)packet;
 
    struct sr_if * this_interface =  sr_get_interface(sr, interface);
-   
+   sr_print_if(this_interface); 
 	  
    if(!this_interface){
     printf("Ghost Interface!!!!!\n");
@@ -452,21 +454,21 @@ void sr_handlepacket(struct sr_instance* sr,
 	uint16_t ip_sum =  ip_hdr->ip_sum;
 	ip_hdr->ip_sum = 0;
 
-	
-
-	if( ip_sum != cksum(ip_hdr, len - sizeof(sr_ethernet_hdr_t))){
+	if( ip_sum != cksum(ip_hdr, ip_hdr->ip_hl * 4)){
    		 printf("Total Len: %u, Calc Len: %lu, Eth Size: %lu, IP Size: %lu\n", len, len - sizeof(sr_ethernet_hdr_t),sizeof(sr_ethernet_hdr_t), sizeof(sr_ip_hdr_t));
-   		 printf("Pre-Check Sum: %d\n", ip_sum);
-   		 printf("calculated sum: %d\n", htons(cksum(ip_hdr, len - sizeof(sr_ethernet_hdr_t))));
+   		 printf("Pre-Check Sum: 0x%04X\n", ip_sum);
+   		 printf("calculated sum: 0x%04X\n", cksum(ip_hdr, ip_hdr->ip_hl*4));
    		 printf("Checksum  was invalid. Packet Dropped\n");
 		break;
 	}
 	printf("ip length and cksum ok\n");
 
         /* destined for our ip address */
-	if(ip_hdr->ip_dst == this_interface->ip){
+	/*if(ip_hdr->ip_dst == this_interface->ip){*/
+	printf("protocol: 0x%04X \t UDP: 0x%04X\n", ip_hdr->ip_p, ip_protocol_udp);
+	if ( sr_is_our_packet(sr, ip_hdr->ip_dst) ) {
 
-		switch(ntohs(ip_hdr->ip_p)){
+		switch(ip_hdr->ip_p){
 
 			/* ICMP Packet*/
 			case ip_protocol_icmp:
@@ -474,15 +476,14 @@ void sr_handlepacket(struct sr_instance* sr,
 			   sr_icmp_t3_hdr_t * icmp_hdr = (sr_icmp_t3_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t));
 			  
 			   /* ICMP Echo Request*/
-			   if( ntohs(icmp_hdr->icmp_type) == icmp_echo_req){
-
+			   if( icmp_hdr->icmp_type == icmp_echo_req){
+				printf("identified echo request\n");
 				/*Verify  Checksum*/
 				uint16_t stated_cksum = icmp_hdr->icmp_sum;
 				icmp_hdr->icmp_sum = 0;
 				if(stated_cksum == cksum(icmp_hdr, len - sizeof(sr_ethernet_hdr_t) - sizeof(sr_ip_hdr_t))){
-
 					/*Send ICMP Echo Reply*/
-					generate_icmp_message(sr, icmp_echo_reply, 0, packet, this_interface);
+					generate_icmp_message(sr, icmp_echo_reply, 0, packet, len, this_interface);
 
 				}
 
@@ -493,13 +494,13 @@ void sr_handlepacket(struct sr_instance* sr,
 			/* TCP Packet*/
 			case ip_protocol_tcp: 
 			{	/* Send ICMP unrchbl*/
-				generate_icmp_message(sr, icmp_dst_unrchbl, 3, packet, this_interface);
+				generate_icmp_message(sr, icmp_dst_unrchbl, 3, packet, len, this_interface);
 				break;
 			}
 			/* UDP Packet */
 			case ip_protocol_udp:
 			{	/* Send ICMP unrchbl*/
-				generate_icmp_message(sr, icmp_dst_unrchbl, 3, packet, this_interface);
+				generate_icmp_message(sr, icmp_dst_unrchbl, 3, packet, len, this_interface);
 	 			break;
 			}
 			default:
@@ -512,18 +513,19 @@ void sr_handlepacket(struct sr_instance* sr,
 	}
 	/* Forward IP Packet Onward*/
 	else{
-
-		printf("forwarding packet onward\n");
+		printf("IP packet ttl: %d\n", ip_hdr->ip_ttl);
 		if(ip_hdr->ip_ttl == 0){
 			/*Send ICMP packet time exceeded */
-			generate_icmp_message(sr, icmp_timeout, 0, packet, this_interface);
+			generate_icmp_message(sr, icmp_timeout, 0, packet, len, this_interface);
+			printf("ip packet timed out\n");
 		}
+		printf("forwarding packet onward\n");
 		ip_hdr->ip_ttl--;
 		
 		/* recompute cksum */
 		printf("computing new ip cksum\n");
 		ip_hdr->ip_sum = 0;
-		ip_hdr->ip_sum = cksum(ip_hdr, len - sizeof(sr_ethernet_hdr_t));	
+		ip_hdr->ip_sum = cksum(ip_hdr, ip_hdr->ip_hl * 4);	
 		
 		printf("looking up entry in routing table\n");
 
@@ -532,8 +534,8 @@ void sr_handlepacket(struct sr_instance* sr,
 
 		if (!next_hop) {
 			/* Send ICMP message */
-			generate_icmp_message(sr, icmp_dst_unrchbl, 0, packet, this_interface);
 			printf("no next hop entry found in routing table\n");
+			generate_icmp_message(sr, icmp_dst_unrchbl, 0, packet, len, this_interface);
 			break;
 		}
 		printf("looking up mac address in cache\n");
@@ -615,32 +617,45 @@ void sr_handlepacket(struct sr_instance* sr,
 }/* end sr_ForwardPacket */
 
 /*---------------------------------------------------------------------
- * Method: generate_icmp_message(struct sr_instance *sr, unsigned int type, unsigned int code, uint8_t *packet, struct sr_if *iface)
+ * Method: generate_icmp_message(struct sr_instance *sr, unsigned int type, unsigned int code, uint8_t *packet, unsigned int len, struct sr_if *iface)
  * Scope:  Global
  *
  * Sends an ICMP message of the specified type and code back to the 
  * source of the specified packet. 
  *---------------------------------------------------------------------*/
-void generate_icmp_message(struct sr_instance *sr, unsigned int type, unsigned int code, uint8_t *packet, struct sr_if *iface) {
+void generate_icmp_message(struct sr_instance *sr, unsigned int type, unsigned int code, uint8_t *packet, unsigned int len, struct sr_if *iface) {
 
 	   uint8_t *hdrbuf;
 	   uint size_of_icmp;
 
 	   /*Create ICMP Header*/
 	   if (type == icmp_dst_unrchbl) {
-		size_of_icmp = sizeof(sr_icmp_t3_hdr_t);
+		size_of_icmp = sizeof(sr_icmp_t3_hdr_t) + 8;
 
-	   	hdrbuf = (uint8_t*)malloc(sizeof(sr_icmp_t3_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t)); 
-	   	memcpy(hdrbuf, packet, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+	   	hdrbuf = (uint8_t*)malloc(sizeof(sr_icmp_t3_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t) + 8); 
+	   	memcpy(hdrbuf, packet, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + 8);
 		
-		sr_icmp_t3_hdr_t *icmp_t3_hdr = (sr_icmp_t3_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+		sr_icmp_t3_hdr_t *icmp_t3_hdr = (sr_icmp_t3_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + 8);
 	   	icmp_t3_hdr->icmp_type = type;
 	   	icmp_t3_hdr->icmp_code = code;
            	icmp_t3_hdr->icmp_sum = 0;
 	   	icmp_t3_hdr->next_mtu = IP_MAXPACKET;
 	   	/*Calculate ICMP checksum */
 	   	icmp_t3_hdr->icmp_sum = cksum(icmp_t3_hdr, sizeof(sr_icmp_t3_hdr_t));
-	   } else {
+	   } 
+	   else if (type == icmp_echo_reply) {
+		printf("Generating ICMP ECHO REPLY packet\n");
+		size_of_icmp = len - (sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t));
+		hdrbuf = (uint8_t*) malloc(len);
+		memcpy(hdrbuf, packet, len);
+		sr_icmp_hdr_t *icmp_hdr = (sr_icmp_hdr_t *)(hdrbuf + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+		icmp_hdr->icmp_type = type;
+		icmp_hdr->icmp_code = code;
+		icmp_hdr->icmp_sum = 0;
+		/*calculate ICMP cksum*/
+		icmp_hdr->icmp_sum = cksum(icmp_hdr, sizeof(sr_icmp_hdr_t));
+	   }
+	   else {
 		size_of_icmp = sizeof(sr_icmp_hdr_t);
 
 		hdrbuf = (uint8_t*) malloc(sizeof(sr_icmp_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t));
@@ -671,7 +686,7 @@ void generate_icmp_message(struct sr_instance *sr, unsigned int type, unsigned i
 	   ip_hdr->ip_ttl = 64;
 	   /* Calculate IP checksum */
 	   ip_hdr->ip_sum = 0; 
-	   ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t) + size_of_icmp);
+	   ip_hdr->ip_sum = cksum(ip_hdr, ip_hdr->ip_hl * 4);
 	  
 
 	   /* Update destination Eth */
@@ -684,13 +699,38 @@ void generate_icmp_message(struct sr_instance *sr, unsigned int type, unsigned i
 	   
 	   uint bufsize = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + size_of_icmp;
 	   print_hdrs(hdrbuf, bufsize);
- 
+
+	   printf("sending ICMP message out interface %s\n", iface->name); 
+	   print_hdrs(hdrbuf, bufsize);
 	   sr_send_packet(sr, hdrbuf, bufsize, iface->name);
 
 	   /* free our buffers here */ 
 	   free(hdrbuf);
 	   
 }
+
+
+/*---------------------------------------------------------------------
+ * Method: sr_is_our_packet(struct sr_instance *sr, uint32_t ip) 
+ * Scope:  Global
+ *
+ * Compares provided IP to all IP addresses associated with the given
+ * router instance.  If there is a match, return 1.  Else return 0. 
+ *---------------------------------------------------------------------*/
+int sr_is_our_packet(struct sr_instance *sr, uint32_t ip) {
+	struct sr_if *iface = sr->if_list;
+	
+	while(iface) {
+		printf("IP: 0x%04X\t iface IP: 0x%04X\n", ip, iface->ip);
+		if (ip == iface->ip) {
+			return 1;
+		}
+		iface = iface->next;
+	}
+	return 0;
+
+}
+
 
 
 /*---------------------------------------------------------------------
